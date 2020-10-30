@@ -23,7 +23,7 @@ ap.add_argument("-o", "--output", type=str,
                 help="path to optional output video file")
 ap.add_argument("-c", "--confidence", type=float, default=0.4,
                 help="minimum probability to filter weak detections")
-ap.add_argument("-s", "--skip-frames", type=int, default=10,
+ap.add_argument("-s", "--skip-frames", type=int, default=3,
                 help="# of skip frames between detections")
 args = vars(ap.parse_args())
 
@@ -35,7 +35,6 @@ CLASSES = ["background", "aeroplane", "bicycle", "bird", "boat",
            "sofa", "train", "tvmonitor"]
 # load our serialized model from disk
 print("[INFO] loading model...")
-# net = cv2.dnn.readNetFromTensorflow('/home/katya/study/practice/People-counter/saved_model.pb')
 net = cv2.dnn.readNetFromCaffe(args["prototxt"], args["model"])
 
 # # if a video path was not supplied, grab a reference to the webcam
@@ -44,9 +43,9 @@ if not args.get("input", False):
     vs = VideoStream(src=0).start()
     time.sleep(2.0)
 # # otherwise, grab a reference to the video file
-else:
-    print("[INFO] opening video file...")
-    vs = cv2.VideoCapture(args["input"])
+# else:
+#     print("[INFO] opening video file...")
+#     vs = cv2.VideoCapture(args["input"])
 
 # initialize the video writer (we'll instantiate later if need be)
 writer = None
@@ -68,14 +67,20 @@ totalUp = 0
 # start the frames per second throughput estimator
 fps = FPS().start()
 
+names = os.listdir(args.get("input"))
+names = sorted(names)
 # loop over frames from the video stream
-for image in os.listdir(args.get("input")):
+
+# def go_by_frame(names):
+for image in names:
+# while True:
     # grab the next frame and handle if we are reading from either
     # VideoCapture or VideoStream
     # frame = vs.read()
     # frame = frame[1] if args.get("input", False) else frame
+
     frame = cv2.imread(os.path.join(args.get("input"), image))
-    # frame = frame.T
+    frame = np.swapaxes(frame, 0, 1)
     # if we are viewing a video and we did not grab a frame then we
     # have reached the end of the video
     if args["input"] is not None and frame is None:
@@ -174,7 +179,7 @@ for image in os.listdir(args.get("input")):
     # draw a horizontal line in the center of the frame -- once an
     # object crosses this line we will determine whether they were
     # moving 'up' or 'down'
-    cv2.line(frame, (W // 2, 0), (W // 2, H), (0, 255, 255), 2)
+    cv2.line(frame, (0, H // 2), (W, H // 2), (0, 255, 255), 2)
     # use the centroid tracker to associate the (1) old object
     # centroids with (2) the newly computed object centroids
     objects = ct.update(rects)
@@ -194,21 +199,21 @@ for image in os.listdir(args.get("input")):
             # centroid and the mean of *previous* centroids will tell
             # us in which direction the object is moving (negative for
             # 'up' and positive for 'down')
-            x = [c[0] for c in to.centroids]
-            direction = centroid[0] - np.mean(x)
+            y = [c[1] for c in to.centroids]
+            direction = centroid[1] - np.mean(y)
             to.centroids.append(centroid)
             # check to see if the object has been counted or not
             if not to.counted:
                 # if the direction is negative (indicating the object
                 # is moving up) AND the centroid is above the center
                 # line, count the object
-                if direction < 0 and centroid[1] < W // 2:
+                if direction < 0 and centroid[1] < H // 2:
                     totalUp += 1
                     to.counted = True
                 # if the direction is positive (indicating the object
                 # is moving down) AND the centroid is below the
                 # center line, count the object
-                elif direction > 0 and centroid[1] > W // 2:
+                elif direction > 0 and centroid[1] > H // 2:
                     totalDown += 1
                     to.counted = True
         # store the trackable object in our dictionary
