@@ -9,11 +9,11 @@ import time
 import dlib
 import cv2
 import os
+import tensorflow as tf
+import inspect
 
 
 ap = argparse.ArgumentParser()
-ap.add_argument("-p", "--prototxt", required=True,
-                help="path to Caffe 'deploy' prototxt file")
 ap.add_argument("-m", "--model", required=True,
                 help="path to Caffe pre-trained model")
 ap.add_argument("-i", "--input", type=str,
@@ -24,15 +24,17 @@ ap.add_argument("-c", "--confidence", type=float, default=0.4,
                 help="minimum probability to filter weak detections")
 ap.add_argument("-s", "--skip-frames", type=int, default=10,
                 help="# of skip frames between detections")
+ap.add_argument("-v", "--input_video", type=str,
+                help="path to video file")
 args = vars(ap.parse_args())
 
-CLASSES = ["background", "aeroplane", "bicycle", "bird", "boat",
-           "bottle", "bus", "car", "cat", "chair", "cow", "diningtable",
-           "dog", "horse", "motorbike", "person", "pottedplant", "sheep",
-           "sofa", "train", "tvmonitor"]
+CLASSES = ["person", "cat", "tv", "car", "meatballs", "marinara sauce",
+            "tomato soup", "chicken noodle soup", "french onion soup",
+            "chicken breast", "ribs", "pulled pork", "hamburger", "cavity", "PeopleTopView"]
 
 print("[INFO] loading model...")
-net = cv2.dnn.readNetFromCaffe(args["prototxt"], args["model"])
+
+net = tf.saved_model.load(args['model'])
 
 
 writer = None
@@ -54,25 +56,29 @@ def create_writer(W, H, args):
 
 
 def create_trackers(detections, trackers):
-    for i in np.arange(0, detections.shape[2]):
-        confidence = detections[0, 0, i, 2]
-        if confidence > args["confidence"]:
-            idx = int(detections[0, 0, i, 1])
-            if CLASSES[idx] != "person":
-                continue
+    confidences = detections['detection_scores'].numpy()[0]
+    indices = detections['detection_classes'].numpy()[0]
+    boxes = detections['detection_boxes'].numpy()[0]
+    for i in np.arange(0, int(detections['num_detections'].numpy()[0])):
+        confidence = confidences[i]
+        if confidence < args["confidence"]:
+            continue
 
-            box = detections[0, 0, i, 3:7] * np.array([W, H, W, H])
-            (startX, startY, endX, endY) = box.astype("int")
-            tracker = dlib.correlation_tracker()
-            rect = dlib.rectangle(startX, startY, endX, endY)
-            tracker.start_track(rgb, rect)
-            trackers.append(tracker)  # compute the (x, y)-coordinates of the bounding box
-            box = detections[0, 0, i, 3:7] * np.array([W, H, W, H])
-            (startX, startY, endX, endY) = box.astype("int")
-            tracker = dlib.correlation_tracker()
-            rect = dlib.rectangle(startX, startY, endX, endY)
-            tracker.start_track(rgb, rect)
-            trackers.append(tracker)
+        idx = int(indices[i]) - 1
+        if idx < len(CLASSES):
+            print(f'{CLASSES[idx]} class')
+        else:
+            print(f'{idx} not in CLASSES')
+            continue
+
+        box = [boxes[i][1], boxes[i][0], boxes[i][3], boxes[i][2]]
+        box = box * np.array([W, H, W, H])
+        (startX, startY, endX, endY) = box.astype("int")
+        tracker = dlib.correlation_tracker()
+        rect = dlib.rectangle(startX, startY, endX, endY)
+        tracker.start_track(rgb, rect)
+        trackers.append(tracker)
+    print('---------------------------------------------------')
     return trackers
 
 
@@ -95,7 +101,7 @@ def follow_object(objectID, centroid, totalUp, totalDown):
     return totalUp, totalDown
 
 
-def set_info(im, totalUp, totalDown, status):
+def set_info(frame, totalUp, totalDown, status):
     info = [
         ("Up", totalUp),
         ("Down", totalDown),
@@ -107,6 +113,10 @@ def set_info(im, totalUp, totalDown, status):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
 
+def draw_rect(frame, rect):
+    cv2.rectangle(frame, rect[0:2], rect[2:4], (255, 0, 0), thickness=3)
+
+
 def print_centroid(frame, totalUp, totalDown):
     text = "ID {}".format(objectID)
     cv2.putText(frame, text, (centroid[0] - 10, centroid[1] - 10),
@@ -114,7 +124,7 @@ def print_centroid(frame, totalUp, totalDown):
     cv2.circle(frame, (centroid[0], centroid[1]), 4, (0, 255, 0), -1)
 
 
-def get_images_from_video(args):
+def get_images_from_images(args):
     names = os.listdir(args.get("input"))
     names = sorted(names)
     for name in names:
@@ -130,11 +140,24 @@ def get_images_from_camera():
     while True:
         yield vs.read()
 
+vs = cv2.VideoCapture()
+
+def get_image_from_video(args):
+    vs = cv2.VideoCapture(args.get("input_video"))
+    while vs.isOpened():
+        ret, frame = vs.read()
+        if not ret:
+            yield None
+        yield frame
+
 
 if args.get("input", False):
-    frame_gen = get_images_from_video(args)
+    frame_gen = get_images_from_images(args)
+elif args.get("input_video", False):
+    frame_gen = get_image_from_video(args)
 else:
     frame_gen = get_images_from_camera()
+
 
 for frame in frame_gen:
     if args["input"] is not None and frame is None:
@@ -149,10 +172,7 @@ for frame in frame_gen:
     if totalFrames % args["skip_frames"] == 0:
         status = "Detecting"
         trackers = []
-        blob = cv2.dnn.blobFromImage(frame, 0.007843, (W, H), 127.5)
-        net.setInput(blob)
-        detections = net.forward()
-
+        detections = net.signatures['serving_default'](tf.convert_to_tensor([frame], dtype='uint8'))
         trackers = create_trackers(detections, trackers)
 
 
@@ -175,7 +195,11 @@ for frame in frame_gen:
         totalUp = f
         totalDown = s
         print_centroid(frame, totalUp, totalDown)
-    set_info(cv2, totalUp, totalDown, status)
+
+    for rect in rects:
+        draw_rect(frame, rect)
+
+    set_info(frame, totalUp, totalDown, status)
 
     if writer is None:
         writer = create_writer(W, H, args)
@@ -193,8 +217,8 @@ print("[INFO] elapsed time: {:.2f}".format(fps.elapsed()))
 print("[INFO] approx. FPS: {:.2f}".format(fps.fps()))
 if writer is not None:
     writer.release()
-if not args.get("input", False):
-    vs.stop()
-else:
-    vs.release()
+# if not args.get("input", False):
+#     vs.stop()
+# else:
+vs.release()
 cv2.destroyAllWindows()
