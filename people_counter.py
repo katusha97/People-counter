@@ -10,7 +10,6 @@ import dlib
 import cv2
 import os
 import tensorflow as tf
-import inspect
 
 
 ap = argparse.ArgumentParser()
@@ -26,6 +25,8 @@ ap.add_argument("-s", "--skip-frames", type=int, default=10,
                 help="# of skip frames between detections")
 ap.add_argument("-v", "--input_video", type=str,
                 help="path to video file")
+ap.add_argument("-z", "--inputt", type=str,
+                help="dummy")
 args = vars(ap.parse_args())
 
 CLASSES = ["person", "cat", "tv", "car", "meatballs", "marinara sauce",
@@ -62,7 +63,7 @@ def create_trackers(detections, trackers):
     for i in np.arange(0, int(detections['num_detections'].numpy()[0])):
         confidence = confidences[i]
         if confidence < args["confidence"]:
-            continue
+            break
 
         idx = int(indices[i]) - 1
         if idx < len(CLASSES):
@@ -77,7 +78,7 @@ def create_trackers(detections, trackers):
         tracker = dlib.correlation_tracker()
         rect = dlib.rectangle(startX, startY, endX, endY)
         tracker.start_track(rgb, rect)
-        trackers.append(tracker)
+        trackers.append((tracker, confidence))
     print('---------------------------------------------------')
     return trackers
 
@@ -113,8 +114,10 @@ def set_info(frame, totalUp, totalDown, status):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
 
-def draw_rect(frame, rect):
-    cv2.rectangle(frame, rect[0:2], rect[2:4], (255, 0, 0), thickness=3)
+def draw_rect(frame, rect, confidence):
+    cv2.rectangle(frame, rect[0:2], rect[2:4],
+                  (255 - int(255 * confidence), 0, int(255 * confidence)),
+                  thickness=int(10 * confidence) + 1)
 
 
 def print_centroid(frame, totalUp, totalDown):
@@ -129,7 +132,8 @@ def get_images_from_images(args):
     names = sorted(names)
     for name in names:
         frame = cv2.imread(os.path.join(args.get("input"), name))
-        frame = np.swapaxes(frame, 0, 1)
+        frame = cv2.resize(frame, (640, 640))
+        # frame = np.swapaxes(frame, 0, 1)
         yield frame
     return None
 
@@ -142,12 +146,14 @@ def get_images_from_camera():
 
 vs = cv2.VideoCapture()
 
+
 def get_image_from_video(args):
     vs = cv2.VideoCapture(args.get("input_video"))
     while vs.isOpened():
         ret, frame = vs.read()
         if not ret:
             yield None
+        frame = cv2.resize(np.swapaxes(frame, 0, 1), (640, 640))
         yield frame
 
 
@@ -162,42 +168,42 @@ else:
 for frame in frame_gen:
     if args["input"] is not None and frame is None:
         break
-    frame = imutils.resize(frame, width=500)
+    frame = imutils.resize(frame, width=640)
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
     (H, W) = frame.shape[:2]
 
     status = "Waiting"
     rects = []
+    confidences = []
     if totalFrames % args["skip_frames"] == 0:
         status = "Detecting"
         trackers = []
-        detections = net.signatures['serving_default'](tf.convert_to_tensor([frame], dtype='uint8'))
+        detections = net.signatures['serving_default'](tf.convert_to_tensor([rgb], dtype='uint8'))
         trackers = create_trackers(detections, trackers)
 
+    for (tracker, confidence) in trackers:
+        status = "Tracking"
+        tracker.update(rgb)
+        pos = tracker.get_position()
+        startX = int(pos.left())
+        startY = int(pos.top())
+        endX = int(pos.right())
+        endY = int(pos.bottom())
+        rects.append((startX, startY, endX, endY))
+        confidences.append(confidence)
 
-    else:
-        for tracker in trackers:
-            status = "Tracking"
-            tracker.update(rgb)
-            pos = tracker.get_position()
-            startX = int(pos.left())
-            startY = int(pos.top())
-            endX = int(pos.right())
-            endY = int(pos.bottom())
-            rects.append((startX, startY, endX, endY))
-
-    cv2.line(frame, (0, H // 2), (W, H // 2), (0, 255, 255), 2)
+    # cv2.line(frame, (0, H // 2), (W, H // 2), (0, 255, 255), 2)
     objects = ct.update(rects)
 
     for (objectID, centroid) in objects.items():
         (f, s) = follow_object(objectID, centroid, totalUp, totalDown)
         totalUp = f
         totalDown = s
-        print_centroid(frame, totalUp, totalDown)
+        # print_centroid(frame, totalUp, totalDown)
 
-    for rect in rects:
-        draw_rect(frame, rect)
+    for rect, confidence in zip(rects, confidences):
+        draw_rect(frame, rect, confidence)
 
     set_info(frame, totalUp, totalDown, status)
 
