@@ -92,10 +92,10 @@ def follow_object(objectID, centroid, totalUp, totalDown):
         direction = centroid[1] - np.mean(y)
         to.centroids.append(centroid)
         if not to.counted:
-            if direction < 0 and centroid[1] < H // 2:
+            if direction < 0 and centroid[0] < W // 4:
                 totalUp += 1
                 to.counted = True
-            elif direction > 0 and centroid[1] > H // 2:
+            elif direction > 0 and centroid[0] > W // 4:
                 totalDown += 1
                 to.counted = True
     trackableObjects[objectID] = to
@@ -104,8 +104,8 @@ def follow_object(objectID, centroid, totalUp, totalDown):
 
 def set_info(frame, totalUp, totalDown, status):
     info = [
-        ("Up", totalUp),
-        ("Down", totalDown),
+        ("Out", totalUp),
+        ("In", totalDown),
         ("Status", status),
     ]
     for (i, (k, v)) in enumerate(info):
@@ -193,7 +193,7 @@ for frame in frame_gen:
         rects.append((startX, startY, endX, endY))
         confidences.append(confidence)
 
-    # cv2.line(frame, (0, H // 2), (W, H // 2), (0, 255, 255), 2)
+    cv2.line(frame, (W // 4, 0), (W // 4, H), (0, 255, 255), 2)
     objects = ct.update(rects)
 
     for (objectID, centroid) in objects.items():
